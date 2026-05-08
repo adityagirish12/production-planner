@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FLOORPLAN — Production Planning Console</title>
+<meta name="description" content="A focused production planning workspace: upload an Excel workbook, get daily KPIs, flagged work orders, material shortages, and a schedulable list — then export the enriched file." />
+
+<!-- Fonts: JetBrains Mono for data, Bebas Neue for display, IBM Plex Sans for UI -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<!-- SheetJS for Excel I/O -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- ── HEADER ────────────────────────────────────────────────── -->
+<header class="masthead">
+  <div class="masthead__left">
+    <div class="logo">
+      <span class="logo__bracket">[</span>
+      <span class="logo__name">FLOORPLAN</span>
+      <span class="logo__bracket">]</span>
+    </div>
+    <div class="logo__sub">PRODUCTION&nbsp;PLANNING&nbsp;CONSOLE&nbsp;·&nbsp;v1.0</div>
+  </div>
+  <div class="masthead__right">
+    <div class="status" id="statusPill">
+      <span class="status__dot"></span>
+      <span class="status__text" id="statusText">NO DATA LOADED</span>
+    </div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<!-- ── INTAKE PANEL (visible until file loaded) ─────────────── -->
+<section class="intake" id="intake">
+  <div class="intake__inner">
+
+    <h1 class="display">
+      <span class="display__line">Upload your</span>
+      <span class="display__line display__line--accent">production data.</span>
+    </h1>
+    <p class="lede">
+      Drop in an Excel workbook with the columns listed below. Every flag, KPI, and
+      schedule on this site is computed from that single file. Export an enriched
+      workbook at the end of your session — re-upload it tomorrow to continue.
+    </p>
+
+    <!-- DROPZONE -->
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xls,.csv" hidden />
+      <div class="dropzone__cross"></div>
+      <div class="dropzone__title">DROP&nbsp;.XLSX&nbsp;HERE</div>
+      <div class="dropzone__or">or click to browse</div>
+      <div class="dropzone__hint" id="dropzoneHint">accepts .xlsx, .xlsm, .csv</div>
+    </label>
+
+    <div class="intake__actions">
+      <button class="btn btn--ghost" id="downloadTemplateBtn" type="button">
+        ↓ Download starter template
+      </button>
+      <button class="btn btn--ghost" id="loadDemoBtn" type="button">
+        ▶ Try with sample data
+      </button>
+    </div>
+
+    <!-- REQUIRED COLUMNS REFERENCE -->
+    <div class="schema">
+      <div class="schema__head">
+        <span class="schema__num">01</span>
+        <span class="schema__title">REQUIRED&nbsp;COLUMNS</span>
+        <span class="schema__rule"></span>
+      </div>
+
+      <div class="schema__grid">
+        <article class="sheet">
+          <header class="sheet__head">
+            <span class="sheet__tag">SHEET</span>
+            <h3 class="sheet__name">WorkOrders</h3>
+          </header>
+          <ul class="sheet__cols">
+            <li><b>OrderNumber</b><span>unique ID</span></li>
+            <li><b>Material</b><span>SKU / part</span></li>
+            <li><b>Description</b><span>text</span></li>
+            <li><b>OrderQty</b><span>number</span></li>
+            <li><b>ConfirmedQty</b><span>number, ≤ OrderQty</span></li>
+            <li><b>WorkCenter</b><span>matches WorkCenters sheet</span></li>
+            <li><b>StartDate</b><span>date</span></li>
+            <li><b>FinishDate</b><span>date</span></li>
+            <li><b>Priority</b><span>1 (high) – 5 (low)</span></li>
+            <li><b>Status</b><span>CRTD · REL · TECO</span></li>
+          </ul>
+        </article>
+
+        <article class="sheet">
+          <header class="sheet__head">
+            <span class="sheet__tag">SHEET</span>
+            <h3 class="sheet__name">Materials</h3>
+          </header>
+          <ul class="sheet__cols">
+            <li><b>Material</b><span>SKU / part</span></li>
+            <li><b>Description</b><span>text</span></li>
+            <li><b>OnHand</b><span>number</span></li>
+            <li><b>Reserved</b><span>number</span></li>
+            <li><b>SafetyStock</b><span>number</span></li>
+            <li><b>ReorderPoint</b><span>number</span></li>
+            <li><b>LeadTimeDays</b><span>number</span></li>
+            <li><b>UoM</b><span>EA, KG, …</span></li>
+          </ul>
+        </article>
+
+        <article class="sheet">
+          <header class="sheet__head">
+            <span class="sheet__tag">SHEET</span>
+            <h3 class="sheet__name">BOM</h3>
+          </header>
+          <ul class="sheet__cols">
+            <li><b>ParentMaterial</b><span>finished good</span></li>
+            <li><b>Component</b><span>matches Materials</span></li>
+            <li><b>QtyPerParent</b><span>number</span></li>
+            <li><b>UoM</b><span>EA, KG, …</span></li>
+          </ul>
+        </article>
+
+        <article class="sheet">
+          <header class="sheet__head">
+            <span class="sheet__tag">SHEET</span>
+            <h3 class="sheet__name">WorkCenters</h3>
+          </header>
+          <ul class="sheet__cols">
+            <li><b>WorkCenter</b><span>code</span></li>
+            <li><b>Description</b><span>text</span></li>
+            <li><b>HoursPerDay</b><span>number</span></li>
+            <li><b>DaysPerWeek</b><span>number</span></li>
+            <li><b>Efficiency</b><span>0–1 (e.g. 0.9)</span></li>
+            <li><b>HoursPerUnit</b><span>std time per unit</span></li>
+          </ul>
+        </article>
+      </div>
+
+      <p class="schema__note">
+        Column names are case- and space-insensitive. Extra columns are preserved on export.
+        Missing optional columns (like <i>HoursPerUnit</i>) fall back to documented defaults.
+      </p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── DASHBOARD (visible after file loaded) ────────────────── -->
+<main class="dash" id="dash" hidden>
+
+  <!-- KPI STRIP -->
+  <section class="kpis" aria-label="Daily KPIs">
+    <div class="kpi" data-tone="ok">
+      <div class="kpi__label">OPEN ORDERS</div>
+      <div class="kpi__value" id="kpiOpen">—</div>
+      <div class="kpi__sub" id="kpiOpenSub">all releases</div>
+    </div>
+    <div class="kpi" data-tone="crit">
+      <div class="kpi__label">PAST DUE</div>
+      <div class="kpi__value" id="kpiPastDue">—</div>
+      <div class="kpi__sub">requires escalation</div>
+    </div>
+    <div class="kpi" data-tone="warn">
+      <div class="kpi__label">AT RISK · 5D</div>
+      <div class="kpi__value" id="kpiAtRisk">—</div>
+      <div class="kpi__sub">due within window</div>
+    </div>
+    <div class="kpi" data-tone="crit">
+      <div class="kpi__label">SHORTAGES</div>
+      <div class="kpi__value" id="kpiShortages">—</div>
+      <div class="kpi__sub" id="kpiShortagesSub">component lines</div>
+    </div>
+    <div class="kpi" data-tone="warn">
+      <div class="kpi__label">LOW STOCK</div>
+      <div class="kpi__value" id="kpiLowStock">—</div>
+      <div class="kpi__sub">below reorder</div>
+    </div>
+    <div class="kpi" data-tone="crit">
+      <div class="kpi__label">WC OVERLOAD</div>
+      <div class="kpi__value" id="kpiOverload">—</div>
+      <div class="kpi__sub">load > 100%</div>
+    </div>
+    <div class="kpi" data-tone="ok">
+      <div class="kpi__label">SCHEDULE ADHERENCE</div>
+      <div class="kpi__value" id="kpiAdherence">—</div>
+      <div class="kpi__sub">closed on time</div>
+    </div>
+  </section>
+
+  <!-- TOOLBAR -->
+  <section class="toolbar">
+    <div class="toolbar__left">
+      <span class="toolbar__file" id="loadedFile">—</span>
+    </div>
+    <div class="toolbar__right">
+      <button class="btn btn--ghost" id="reuploadBtn" type="button">↻ Replace file</button>
+      <button class="btn btn--primary" id="exportBtn" type="button">↓ Export workbook</button>
+    </div>
+  </section>
+
+  <!-- TODAY'S SCHEDULE -->
+  <section class="block">
+    <header class="block__head">
+      <span class="block__num">02</span>
+      <h2 class="block__title">TODAY'S SCHEDULE</h2>
+      <span class="block__rule"></span>
+      <span class="block__hint">sorted by priority, then earliest finish</span>
+    </header>
+    <div class="table-wrap">
+      <table class="data-table" id="scheduleTable">
+        <thead>
+          <tr>
+            <th>#</th><th>ORDER</th><th>MATERIAL</th><th>DESCRIPTION</th>
+            <th class="num">OPEN&nbsp;QTY</th><th class="num">EST.&nbsp;HRS</th>
+            <th>WORK CENTER</th><th>FINISH</th><th class="num">DAYS</th>
+            <th>PRIORITY</th><th>FLAG</th>
+          </tr>
+        </thead>
+        <tbody id="scheduleBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- TWO-COLUMN: SHORTAGES + CAPACITY -->
+  <section class="cols">
+    <div class="block">
+      <header class="block__head">
+        <span class="block__num">03</span>
+        <h2 class="block__title">MATERIAL&nbsp;SHORTAGES</h2>
+        <span class="block__rule"></span>
+      </header>
+      <div class="table-wrap">
+        <table class="data-table" id="shortageTable">
+          <thead>
+            <tr>
+              <th>ORDER</th><th>COMPONENT</th>
+              <th class="num">REQ</th><th class="num">AVAIL</th><th class="num">SHORT</th>
+              <th>FLAG</th>
+            </tr>
+          </thead>
+          <tbody id="shortageBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="block">
+      <header class="block__head">
+        <span class="block__num">04</span>
+        <h2 class="block__title">WORK&nbsp;CENTER&nbsp;LOAD</h2>
+        <span class="block__rule"></span>
+      </header>
+      <div class="table-wrap">
+        <table class="data-table" id="capacityTable">
+          <thead>
+            <tr>
+              <th>WC</th><th>DESCRIPTION</th>
+              <th class="num">CAPACITY&nbsp;(H/WK)</th>
+              <th class="num">DEMAND&nbsp;(H)</th>
+              <th class="num">LOAD</th>
+              <th>FLAG</th>
+            </tr>
+          </thead>
+          <tbody id="capacityBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- INVENTORY -->
+  <section class="block">
+    <header class="block__head">
+      <span class="block__num">05</span>
+      <h2 class="block__title">INVENTORY&nbsp;HEALTH</h2>
+      <span class="block__rule"></span>
+    </header>
+    <div class="table-wrap">
+      <table class="data-table" id="inventoryTable">
+        <thead>
+          <tr>
+            <th>MATERIAL</th><th>DESCRIPTION</th>
+            <th class="num">ON&nbsp;HAND</th><th class="num">RESERVED</th>
+            <th class="num">AVAILABLE</th><th class="num">SAFETY</th>
+            <th class="num">REORDER</th><th class="num">LEAD&nbsp;(D)</th>
+            <th>STATUS</th>
+          </tr>
+        </thead>
+        <tbody id="inventoryBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- WARNINGS / VALIDATION -->
+  <section class="block" id="warningsBlock" hidden>
+    <header class="block__head">
+      <span class="block__num">!!</span>
+      <h2 class="block__title block__title--warn">DATA&nbsp;NOTICES</h2>
+      <span class="block__rule"></span>
+    </header>
+    <ul class="warnings" id="warningsList"></ul>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="foot__l">FLOORPLAN · single-page production planning console</div>
+  <div class="foot__r">data stays in your browser · no server roundtrip</div>
+</footer>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
