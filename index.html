@@ -198,12 +198,20 @@
   <section class="toolbar">
     <div class="toolbar__left">
       <span class="toolbar__file" id="loadedFile">—</span>
+      <span class="edit-counter" id="editCounter" hidden></span>
     </div>
     <div class="toolbar__right">
+      <button class="btn btn--ghost" id="resetEditsBtn" type="button" hidden>↺ Reset edits</button>
       <button class="btn btn--ghost" id="reuploadBtn" type="button">↻ Replace file</button>
       <button class="btn btn--primary" id="exportBtn" type="button">↓ Export workbook</button>
     </div>
   </section>
+
+  <!-- EDIT HINT -->
+  <p class="edit-hint">
+    <span class="edit-hint__dot"></span>
+    Click any <b>highlighted cell</b> in the schedule or inventory tables to edit. KPIs recalculate instantly. Press <kbd>Enter</kbd> to commit, <kbd>Esc</kbd> to cancel.
+  </p>
 
   <!-- TODAY'S SCHEDULE -->
   <section class="block">
