@@ -117,8 +117,36 @@ let STATE = {
   raw: null,        // canonicalized rows per sheet
   warnings: [],
   computed: null,   // { kpis, schedule, shortages, capacity, inventory }
-  edits: new Map()  // key: "Sheet:idx:field" → original value (for revert)
+  edits: new Map(), // key: "Sheet:idx:field" → original value (for revert)
+  confirmations: [] // shop floor confirmation log (from operator screen)
 };
+
+/* Persist to localStorage so floor.html can read and write back */
+function persistShared(){
+  if (!STATE.raw) return;
+  const Shared = window.FloorplanShared;
+  if (!Shared) return;
+  Shared.save({
+    raw: STATE.raw,
+    confirmations: STATE.confirmations,
+    fileName: STATE.fileName,
+    savedAt: new Date().toISOString()
+  });
+}
+
+/* Load any existing shared state on page load (operator may have already
+   uploaded data via the planner in a previous session). */
+function tryLoadShared(){
+  const Shared = window.FloorplanShared;
+  if (!Shared) return false;
+  const s = Shared.load();
+  if (!s || !s.raw) return false;
+  STATE.raw = s.raw;
+  STATE.confirmations = s.confirmations || [];
+  STATE.fileName = s.fileName || 'restored';
+  STATE.warnings = ['Restored from previous session — re-upload to refresh.'];
+  return true;
+}
 
 /* Edit tracking helpers ------------------------------------- */
 function editKey(sheet, idx, field){ return `${sheet}:${idx}:${field}`; }
@@ -182,7 +210,31 @@ function ingestWorkbook(wb){
     }
     raw[sheetName] = canon;
   }
-  return { raw, warnings };
+
+  // Optionally pick up a Confirmations sheet (from a re-uploaded export)
+  const confSheet = findSheet(wb, 'Confirmations');
+  let confirmations = [];
+  if (confSheet){
+    const confRows = XLSX.utils.sheet_to_json(wb.Sheets[confSheet], { defval: null, raw: false });
+    confirmations = confRows.map(r => {
+      const ts = r.Timestamp ? new Date(r.Timestamp) : new Date();
+      return {
+        id: 'imp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        timestamp: isNaN(ts) ? new Date() : ts,
+        OrderNumber: r.OrderNumber || '',
+        WorkCenter: r.WorkCenter || '',
+        Operator: r.Operator || '',
+        Action: String(r.Action || '').toUpperCase(),
+        Quantity: r.Quantity != null && r.Quantity !== '' ? Number(r.Quantity) : undefined,
+        Minutes: r.Minutes != null && r.Minutes !== '' ? Number(r.Minutes) : undefined
+      };
+    }).filter(c => c.OrderNumber && c.Action);
+    if (confirmations.length){
+      warnings.push(`Restored ${confirmations.length} floor confirmation${confirmations.length===1?'':'s'} from the Confirmations sheet.`);
+    }
+  }
+
+  return { raw, warnings, confirmations };
 }
 
 /* ============================================================
@@ -192,19 +244,38 @@ function computeAll(raw){
   const today = todayStartOfDay();
   const warnings = [];
 
-  // Clean & coerce
-  const wos = (raw.WorkOrders || []).map(r => ({
-    OrderNumber: r.OrderNumber,
-    Material: r.Material,
-    Description: r.Description || '',
-    OrderQty: Number(r.OrderQty) || 0,
-    ConfirmedQty: Number(r.ConfirmedQty) || 0,
-    WorkCenter: r.WorkCenter,
-    StartDate: parseDate(r.StartDate),
-    FinishDate: parseDate(r.FinishDate),
-    Priority: Number(r.Priority) || 3,
-    Status: String(r.Status || 'CRTD').toUpperCase().trim()
-  })).filter(w => w.OrderNumber);
+  // Derive live state from any confirmations the floor has logged
+  const confirmations = STATE.confirmations || [];
+  const orderLive = window.FloorplanShared
+    ? window.FloorplanShared.deriveOrderLiveState(confirmations)
+    : new Map();
+
+  // Clean & coerce — augment ConfirmedQty with floor confirmations
+  const wos = (raw.WorkOrders || []).map(r => {
+    const live = orderLive.get(r.OrderNumber);
+    const baseConfirmed = Number(r.ConfirmedQty) || 0;
+    const floorAdded = live ? live.ActualConfirmed : 0;
+    const liveStatus = live ? live.LiveStatus : null;
+    // If the operator marked it complete on the floor, treat as TECO
+    const status = liveStatus === 'COMPLETE'
+      ? 'TECO'
+      : String(r.Status || 'CRTD').toUpperCase().trim();
+    return {
+      OrderNumber: r.OrderNumber,
+      Material: r.Material,
+      Description: r.Description || '',
+      OrderQty: Number(r.OrderQty) || 0,
+      ConfirmedQty: baseConfirmed + floorAdded,
+      WorkCenter: r.WorkCenter,
+      StartDate: parseDate(r.StartDate),
+      FinishDate: parseDate(r.FinishDate),
+      Priority: Number(r.Priority) || 3,
+      Status: status,
+      LiveStatus: liveStatus,
+      ScrapQty: live ? live.ActualScrap : 0,
+      DowntimeMinutes: live ? live.DowntimeMinutes : 0
+    };
+  }).filter(w => w.OrderNumber);
 
   const mats = (raw.Materials || []).map(r => ({
     Material: r.Material,
@@ -549,6 +620,81 @@ function renderAll(c){
 
   // Update edit counter in toolbar
   updateEditCounter();
+
+  // New sections
+  renderLiveFloor(c);
+  renderBacklog(c);
+}
+
+/* ── LIVE FLOOR ─────────────────────────────────────── */
+function renderLiveFloor(c){
+  const grid = $('liveGrid');
+  if (!grid) return;
+  const wcs = (STATE.raw.WorkCenters || []);
+  const confirmations = STATE.confirmations || [];
+  if (confirmations.length === 0){
+    grid.innerHTML = '<div class="live-empty">No floor activity yet — open the operator screen and start reporting work.</div>';
+    return;
+  }
+  const Shared = window.FloorplanShared;
+  const wcLive = Shared ? Shared.deriveWCLiveState(confirmations, c.enrichedWOs) : new Map();
+  grid.innerHTML = wcs.map(w => {
+    const s = wcLive.get(w.WorkCenter) || { Running:0, Paused:0, Idle:0, RunningOrders:[] };
+    const runningOrders = s.RunningOrders.slice(0, 3).join(', ') + (s.RunningOrders.length > 3 ? `, +${s.RunningOrders.length - 3} more` : '');
+    return `
+      <div class="live-cell">
+        <div class="live-cell__wc">WORK CENTER</div>
+        <div class="live-cell__title">${escapeHtml(w.WorkCenter)}</div>
+        <div class="live-cell__counts">
+          <span><span class="live-cell__dot live-cell__dot--run"></span><b>${s.Running}</b> RUN</span>
+          <span><span class="live-cell__dot live-cell__dot--pause"></span><b>${s.Paused}</b> PAUSE</span>
+          <span><span class="live-cell__dot live-cell__dot--idle"></span><b>${s.Idle}</b> IDLE</span>
+        </div>
+        <div class="live-cell__orders">${escapeHtml(runningOrders || '—')}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+/* ── BACKLOG AGING ──────────────────────────────────── */
+function renderBacklog(c){
+  if (!$('backlog13')) return;
+  const today = todayStartOfDay();
+  // Past-due open orders only
+  const pastDue = c.enrichedWOs.filter(w => w.Flag === 'PAST DUE');
+  const total = c.enrichedWOs.filter(w => w.Flag !== 'COMPLETE' && w.OpenQty > 0).length;
+
+  let b13 = 0, b47 = 0, b8 = 0;
+  const rows = [];
+  for (const w of pastDue){
+    const daysLate = w.FinishDate ? -daysBetween(today, w.FinishDate) : 0;
+    let bucket;
+    if (daysLate <= 3){ b13++; bucket = 'warn'; }
+    else if (daysLate <= 7){ b47++; bucket = 'crit'; }
+    else { b8++; bucket = 'crit'; }
+    rows.push({ ...w, daysLate, bucket });
+  }
+  $('backlog13').textContent = b13;
+  $('backlog47').textContent = b47;
+  $('backlog8').textContent = b8;
+  $('backlogTotalOpen').textContent = total;
+
+  const list = $('backlogList');
+  if (rows.length === 0){
+    list.innerHTML = '<div style="padding:18px;text-align:center;color:var(--ink-mute);font-family:var(--mono);font-size:11px;letter-spacing:0.12em">NO PAST-DUE ORDERS</div>';
+    return;
+  }
+  // Sort by days late descending
+  rows.sort((a,b) => b.daysLate - a.daysLate);
+  list.innerHTML = rows.slice(0, 30).map(w => `
+    <div class="backlog__row" data-age="${w.bucket}">
+      <span><b>${escapeHtml(w.OrderNumber)}</b></span>
+      <span>${escapeHtml(w.Material)} · ${escapeHtml(w.Description || '')}</span>
+      <span>${escapeHtml(w.WorkCenter || '')}</span>
+      <span style="text-align:right">${fmtNum(w.OpenQty)} open</span>
+      <span class="backlog__age">${w.daysLate}D LATE</span>
+    </div>
+  `).join('');
 }
 
 /* ============================================================
@@ -573,6 +719,7 @@ function recomputeAndRender(){
   const computed = computeAll(STATE.raw);
   STATE.computed = computed;
   renderAll(computed);
+  persistShared();
 }
 
 function applyEdit(sheet, idx, field, newValue){
@@ -727,6 +874,21 @@ function exportEnrichedWorkbook(){
     LeadTimeDays: m.LeadTimeDays, UoM: m.UoM, Status: m.Status
   }))), 'InventoryHealth');
 
+  // Floor confirmations log (operator data capture)
+  const confirmations = STATE.confirmations || [];
+  if (confirmations.length){
+    const confRows = confirmations.map(c => ({
+      Timestamp: c.timestamp instanceof Date ? c.timestamp.toISOString() : c.timestamp,
+      OrderNumber: c.OrderNumber || '',
+      WorkCenter: c.WorkCenter || '',
+      Operator: c.Operator || '',
+      Action: c.Action || '',
+      Quantity: c.Quantity ?? '',
+      Minutes: c.Minutes ?? ''
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(confRows), 'Confirmations');
+  }
+
   // KPI snapshot
   const k = c.kpis;
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
@@ -847,16 +1009,19 @@ async function handleFile(file){
   if (!file) return;
   STATE.fileName = file.name;
   STATE.edits = new Map();
+  STATE.confirmations = []; // fresh upload wipes confirmations from prior session
   setStatus('warn', 'PARSING…');
   try{
     const wb = await readWorkbook(file);
-    const { raw, warnings } = ingestWorkbook(wb);
+    const { raw, warnings, confirmations } = ingestWorkbook(wb);
     STATE.raw = raw;
     STATE.warnings = warnings;
+    if (confirmations && confirmations.length) STATE.confirmations = confirmations;
     const computed = computeAll(raw);
     STATE.computed = computed;
     showDashboard();
     renderAll(computed);
+    persistShared();
     toast(`Loaded ${file.name}`);
   } catch(err){
     console.error(err);
@@ -918,10 +1083,12 @@ function init(){
     STATE.warnings = warnings;
     STATE.fileName = 'demo_data.xlsx';
     STATE.edits = new Map();
+    STATE.confirmations = [];
     const computed = computeAll(raw);
     STATE.computed = computed;
     showDashboard();
     renderAll(computed);
+    persistShared();
     toast('Demo data loaded');
   });
   $('exportBtn').addEventListener('click', exportEnrichedWorkbook);
@@ -929,8 +1096,33 @@ function init(){
     if (editCount() > 0 && !confirm(`You have ${editCount()} unsaved edit${editCount()===1?'':'s'}. Replace file anyway?`)) return;
     showIntake();
     fileInput.value = '';
-    STATE = { fileName:null, raw:null, warnings:[], computed:null, edits: new Map() };
+    STATE = { fileName:null, raw:null, warnings:[], computed:null, edits: new Map(), confirmations: [] };
+    if (window.FloorplanShared) window.FloorplanShared.clear();
   });
+
+  // Listen for updates pushed from the floor page (operator confirmations)
+  if (window.FloorplanShared){
+    window.FloorplanShared.onSync(msg => {
+      if (msg.type === 'state-cleared') return;
+      // Re-load shared state and re-render
+      const s = window.FloorplanShared.load();
+      if (s && s.confirmations){
+        STATE.confirmations = s.confirmations;
+        if (STATE.raw){
+          const computed = computeAll(STATE.raw);
+          STATE.computed = computed;
+          renderAll(computed);
+        }
+      }
+    });
+    // On load, attempt to restore from shared (if user just came from the floor screen)
+    if (!STATE.raw && tryLoadShared()){
+      const computed = computeAll(STATE.raw);
+      STATE.computed = computed;
+      showDashboard();
+      renderAll(computed);
+    }
+  }
 
   // Reset edits button
   $('resetEditsBtn').addEventListener('click', resetAllEdits);
