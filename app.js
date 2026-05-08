@@ -116,8 +116,20 @@ let STATE = {
   fileName: null,
   raw: null,        // canonicalized rows per sheet
   warnings: [],
-  computed: null    // { kpis, schedule, shortages, capacity, inventory }
+  computed: null,   // { kpis, schedule, shortages, capacity, inventory }
+  edits: new Map()  // key: "Sheet:idx:field" → original value (for revert)
 };
+
+/* Edit tracking helpers ------------------------------------- */
+function editKey(sheet, idx, field){ return `${sheet}:${idx}:${field}`; }
+function isEdited(sheet, idx, field){ return STATE.edits.has(editKey(sheet, idx, field)); }
+function recordEdit(sheet, idx, field, originalValue){
+  const key = editKey(sheet, idx, field);
+  // Only record the FIRST time this cell is edited so reset returns to the original
+  if (!STATE.edits.has(key)) STATE.edits.set(key, originalValue);
+}
+function clearEdits(){ STATE.edits.clear(); }
+function editCount(){ return STATE.edits.size; }
 
 function readWorkbook(file){
   return new Promise((resolve, reject) => {
@@ -428,26 +440,30 @@ function renderAll(c){
     setStatus('ok', 'ALL CLEAR');
   }
 
-  // SCHEDULE
+  // SCHEDULE (editable: OrderQty, ConfirmedQty, Priority)
   const sb = $('scheduleBody');
   if (c.schedule.length === 0){
     renderEmpty(sb, 11, 'NO OPEN ORDERS');
   } else {
-    sb.innerHTML = c.schedule.map((w,i) => `
-      <tr>
-        <td>${i+1}</td>
-        <td><b>${escapeHtml(w.OrderNumber)}</b></td>
-        <td>${escapeHtml(w.Material)}</td>
-        <td>${escapeHtml(w.Description)}</td>
-        <td class="num">${fmtNum(w.OpenQty)}</td>
-        <td class="num">${fmtNum(w.EstHours,1)}</td>
-        <td>${escapeHtml(w.WorkCenter)}</td>
-        <td>${fmtDate(w.FinishDate)}</td>
-        <td class="num">${w.DaysToFinish === null ? '—' : w.DaysToFinish}</td>
-        <td><span class="prio" data-p="${w.Priority}"><span class="prio__dot"></span>P${w.Priority}</span></td>
-        <td>${flagPill(w.Flag, w.Tone)}</td>
-      </tr>
-    `).join('');
+    sb.innerHTML = c.schedule.map((w,i) => {
+      const idx = (STATE.raw.WorkOrders || []).findIndex(r => r.OrderNumber === w.OrderNumber);
+      const editFlag = (field) => idx >= 0 && isEdited('WorkOrders', idx, field) ? ' is-edited' : '';
+      return `
+        <tr>
+          <td>${i+1}</td>
+          <td><b>${escapeHtml(w.OrderNumber)}</b></td>
+          <td>${escapeHtml(w.Material)}</td>
+          <td>${escapeHtml(w.Description)}</td>
+          <td class="num">${fmtNum(w.OpenQty)}</td>
+          <td class="num">${fmtNum(w.EstHours,1)}</td>
+          <td>${escapeHtml(w.WorkCenter)}</td>
+          <td>${fmtDate(w.FinishDate)}</td>
+          <td class="num">${w.DaysToFinish === null ? '—' : w.DaysToFinish}</td>
+          <td class="editable${editFlag('Priority')}" data-sheet="WorkOrders" data-idx="${idx}" data-field="Priority" tabindex="0"><span class="prio" data-p="${w.Priority}"><span class="prio__dot"></span>P${w.Priority}</span></td>
+          <td>${flagPill(w.Flag, w.Tone)}</td>
+        </tr>
+      `;
+    }).join('');
   }
 
   // SHORTAGES
@@ -468,7 +484,7 @@ function renderAll(c){
     `).join('');
   }
 
-  // CAPACITY
+  // CAPACITY (editable: HoursPerDay, DaysPerWeek, Efficiency, HoursPerUnit)
   const cb = $('capacityBody');
   if (c.capacity.length === 0){
     renderEmpty(cb, 6, 'NO WORK CENTERS DEFINED');
@@ -476,6 +492,11 @@ function renderAll(c){
     cb.innerHTML = c.capacity.map(w => {
       const pct = Math.min(w.Load * 100, 200);
       const barCls = w.Tone === 'crit' ? 'bar--crit' : w.Tone === 'warn' ? 'bar--warn' : '';
+      const idx = (STATE.raw.WorkCenters || []).findIndex(r => r.WorkCenter === w.WorkCenter);
+      // We don't render individual editable cells in this summary table because
+      // it would crowd the layout — capacity inputs are edited through their
+      // own dedicated mini-form (see settings drawer below). To keep this
+      // section purely informational for now.
       return `
         <tr>
           <td><b>${escapeHtml(w.WorkCenter)}</b></td>
@@ -492,24 +513,25 @@ function renderAll(c){
     }).join('');
   }
 
-  // INVENTORY
+  // INVENTORY (editable: OnHand, Reserved, SafetyStock, ReorderPoint, LeadTimeDays)
   const ib = $('inventoryBody');
   if (c.inventory.length === 0){
     renderEmpty(ib, 9, 'NO MATERIALS LOADED');
   } else {
-    ib.innerHTML = c.inventory.map(m => {
+    ib.innerHTML = c.inventory.map((m, idx) => {
       const tone = m.Status === 'STOCKOUT' || m.Status === 'BELOW REORDER' ? 'crit'
                  : m.Status === 'LOW STOCK' ? 'warn' : 'ok';
+      const editFlag = (field) => isEdited('Materials', idx, field) ? ' is-edited' : '';
       return `
         <tr>
           <td><b>${escapeHtml(m.Material)}</b></td>
           <td>${escapeHtml(m.Description)}</td>
-          <td class="num">${fmtNum(m.OnHand,2)}</td>
-          <td class="num">${fmtNum(m.Reserved,2)}</td>
+          <td class="num editable${editFlag('OnHand')}" data-sheet="Materials" data-idx="${idx}" data-field="OnHand" tabindex="0">${fmtNum(m.OnHand,2)}</td>
+          <td class="num editable${editFlag('Reserved')}" data-sheet="Materials" data-idx="${idx}" data-field="Reserved" tabindex="0">${fmtNum(m.Reserved,2)}</td>
           <td class="num">${fmtNum(m.Available,2)}</td>
-          <td class="num">${fmtNum(m.SafetyStock,2)}</td>
-          <td class="num">${fmtNum(m.ReorderPoint,2)}</td>
-          <td class="num">${fmtNum(m.LeadTimeDays)}</td>
+          <td class="num editable${editFlag('SafetyStock')}" data-sheet="Materials" data-idx="${idx}" data-field="SafetyStock" tabindex="0">${fmtNum(m.SafetyStock,2)}</td>
+          <td class="num editable${editFlag('ReorderPoint')}" data-sheet="Materials" data-idx="${idx}" data-field="ReorderPoint" tabindex="0">${fmtNum(m.ReorderPoint,2)}</td>
+          <td class="num editable${editFlag('LeadTimeDays')}" data-sheet="Materials" data-idx="${idx}" data-field="LeadTimeDays" tabindex="0">${fmtNum(m.LeadTimeDays)}</td>
           <td>${flagPill(m.Status, tone)}</td>
         </tr>
       `;
@@ -524,6 +546,118 @@ function renderAll(c){
   } else {
     $('warningsBlock').hidden = true;
   }
+
+  // Update edit counter in toolbar
+  updateEditCounter();
+}
+
+/* ============================================================
+   5b. CLICK-TO-EDIT
+   ============================================================ */
+function updateEditCounter(){
+  const el = $('editCounter');
+  if (!el) return;
+  const n = editCount();
+  if (n === 0){
+    el.textContent = '';
+    el.hidden = true;
+    $('resetEditsBtn').hidden = true;
+  } else {
+    el.textContent = `${n} edit${n === 1 ? '' : 's'}`;
+    el.hidden = false;
+    $('resetEditsBtn').hidden = false;
+  }
+}
+
+function recomputeAndRender(){
+  const computed = computeAll(STATE.raw);
+  STATE.computed = computed;
+  renderAll(computed);
+}
+
+function applyEdit(sheet, idx, field, newValue){
+  const arr = STATE.raw[sheet];
+  if (!arr || !arr[idx]) return false;
+  const original = arr[idx][field];
+  // Coerce value
+  let coerced = newValue;
+  if (typeof original === 'number' || ['OnHand','Reserved','SafetyStock','ReorderPoint','LeadTimeDays','OrderQty','ConfirmedQty','Priority','HoursPerDay','DaysPerWeek','Efficiency','HoursPerUnit','QtyPerParent'].includes(field)){
+    const n = Number(newValue);
+    if (isNaN(n)){
+      toast('Must be a number', true);
+      return false;
+    }
+    coerced = n;
+  }
+  // Don't record an edit if the value didn't actually change
+  if (coerced === original) return false;
+  recordEdit(sheet, idx, field, original);
+  arr[idx][field] = coerced;
+  return true;
+}
+
+function startCellEdit(td){
+  if (td.classList.contains('is-editing')) return;
+  const sheet = td.dataset.sheet;
+  const idx = parseInt(td.dataset.idx, 10);
+  const field = td.dataset.field;
+  if (!sheet || isNaN(idx) || !field) return;
+  if (idx < 0) { toast('Cannot edit this row', true); return; }
+
+  const currentValue = STATE.raw[sheet][idx][field];
+  const startVal = currentValue ?? '';
+
+  td.classList.add('is-editing');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'decimal';
+  input.value = startVal;
+  input.className = 'cell-input';
+
+  // Replace cell content with input, but remember to restore on cancel
+  td._beforeEditHTML = td.innerHTML;
+  td.innerHTML = '';
+  td.appendChild(input);
+  input.focus();
+  input.select();
+
+  const finish = (commit) => {
+    if (td._finished) return;
+    td._finished = true;
+    td.classList.remove('is-editing');
+    const raw = input.value.trim();
+    if (commit && raw !== String(startVal)){
+      const ok = applyEdit(sheet, idx, field, raw);
+      if (ok){
+        recomputeAndRender();
+        return; // recomputeAndRender re-renders the whole table
+      }
+    }
+    // No commit (or no change / failed): restore previous content
+    td.innerHTML = td._beforeEditHTML;
+  };
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === 'Tab'){ e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape'){ e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+function resetAllEdits(){
+  if (editCount() === 0) return;
+  if (!confirm(`Discard ${editCount()} edit${editCount()===1?'':'s'} and revert to the uploaded file?`)) return;
+  // Walk the edits map and write originals back
+  for (const [key, originalValue] of STATE.edits.entries()){
+    const [sheet, idxStr, field] = key.split(':');
+    const idx = parseInt(idxStr, 10);
+    if (STATE.raw[sheet] && STATE.raw[sheet][idx]){
+      STATE.raw[sheet][idx][field] = originalValue;
+    }
+  }
+  clearEdits();
+  recomputeAndRender();
+  toast('Edits reverted');
 }
 
 /* ============================================================
@@ -712,6 +846,7 @@ function buildDemoWorkbook(){
 async function handleFile(file){
   if (!file) return;
   STATE.fileName = file.name;
+  STATE.edits = new Map();
   setStatus('warn', 'PARSING…');
   try{
     const wb = await readWorkbook(file);
@@ -782,6 +917,7 @@ function init(){
     STATE.raw = raw;
     STATE.warnings = warnings;
     STATE.fileName = 'demo_data.xlsx';
+    STATE.edits = new Map();
     const computed = computeAll(raw);
     STATE.computed = computed;
     showDashboard();
@@ -790,9 +926,28 @@ function init(){
   });
   $('exportBtn').addEventListener('click', exportEnrichedWorkbook);
   $('reuploadBtn').addEventListener('click', () => {
+    if (editCount() > 0 && !confirm(`You have ${editCount()} unsaved edit${editCount()===1?'':'s'}. Replace file anyway?`)) return;
     showIntake();
     fileInput.value = '';
-    STATE = { fileName:null, raw:null, warnings:[], computed:null };
+    STATE = { fileName:null, raw:null, warnings:[], computed:null, edits: new Map() };
+  });
+
+  // Reset edits button
+  $('resetEditsBtn').addEventListener('click', resetAllEdits);
+
+  // Click-to-edit: event delegation on the dashboard
+  $('dash').addEventListener('click', e => {
+    const td = e.target.closest('td.editable');
+    if (td) startCellEdit(td);
+  });
+  // Keyboard: Enter on focused editable cell starts edit
+  $('dash').addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    const td = e.target.closest('td.editable');
+    if (td && !td.classList.contains('is-editing')){
+      e.preventDefault();
+      startCellEdit(td);
+    }
   });
 }
 
