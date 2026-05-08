@@ -29,6 +29,10 @@
     <div class="logo__sub">PRODUCTION&nbsp;PLANNING&nbsp;CONSOLE&nbsp;·&nbsp;v1.0</div>
   </div>
   <div class="masthead__right">
+    <a href="floor.html" class="masthead__floor-link" title="Open floor / operator screen">
+      <span class="masthead__floor-icon">▢</span>
+      <span class="masthead__floor-text">FLOOR&nbsp;CONSOLE</span>
+    </a>
     <div class="status" id="statusPill">
       <span class="status__dot"></span>
       <span class="status__text" id="statusText">NO DATA LOADED</span>
@@ -213,6 +217,49 @@
     Click any <b>highlighted cell</b> in the schedule or inventory tables to edit. KPIs recalculate instantly. Press <kbd>Enter</kbd> to commit, <kbd>Esc</kbd> to cancel.
   </p>
 
+  <!-- LIVE FLOOR + BACKLOG AGING -->
+  <section class="cols">
+    <div class="block">
+      <header class="block__head">
+        <span class="block__num">L1</span>
+        <h2 class="block__title">LIVE&nbsp;FLOOR</h2>
+        <span class="block__rule"></span>
+        <a href="floor.html" class="block__link" target="_blank" rel="noopener">↗ open operator screen</a>
+      </header>
+      <div class="live-grid" id="liveGrid">
+        <div class="live-empty">No floor activity yet — operators have not started reporting.</div>
+      </div>
+    </div>
+
+    <div class="block">
+      <header class="block__head">
+        <span class="block__num">L2</span>
+        <h2 class="block__title">BACKLOG&nbsp;AGING</h2>
+        <span class="block__rule"></span>
+        <span class="block__hint">past-due orders by age</span>
+      </header>
+      <div class="backlog" id="backlogGrid">
+        <div class="backlog__bucket" data-tone="warn">
+          <div class="backlog__count" id="backlog13">0</div>
+          <div class="backlog__label">1–3 DAYS LATE</div>
+        </div>
+        <div class="backlog__bucket" data-tone="crit">
+          <div class="backlog__count" id="backlog47">0</div>
+          <div class="backlog__label">4–7 DAYS LATE</div>
+        </div>
+        <div class="backlog__bucket" data-tone="crit">
+          <div class="backlog__count" id="backlog8">0</div>
+          <div class="backlog__label">8+ DAYS LATE</div>
+        </div>
+        <div class="backlog__bucket" data-tone="ok">
+          <div class="backlog__count" id="backlogTotalOpen">0</div>
+          <div class="backlog__label">TOTAL OPEN</div>
+        </div>
+      </div>
+      <div class="backlog__list" id="backlogList"></div>
+    </div>
+  </section>
+
   <!-- TODAY'S SCHEDULE -->
   <section class="block">
     <header class="block__head">
@@ -324,6 +371,7 @@
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
 
+<script src="shared.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
