@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>FLOORPLAN — Operator Floor Console</title>
+<meta name="description" content="Tablet-optimized shop floor data capture: pick a work center, see your queue, tap to start/complete/report." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="floor.css" />
+</head>
+<body class="floor-body">
+
+<header class="floor-header">
+  <div class="floor-header__left">
+    <a href="index.html" class="floor-header__back">← PLANNER</a>
+    <div class="floor-header__brand">
+      <span class="logo__bracket">[</span><span class="logo__name">FLOOR</span><span class="logo__bracket">]</span>
+    </div>
+  </div>
+  <div class="floor-header__center">
+    <select id="wcSelect" class="wc-select" aria-label="Work center">
+      <option value="">— SELECT WORK CENTER —</option>
+    </select>
+  </div>
+  <div class="floor-header__right">
+    <input id="operatorName" class="operator-input" placeholder="OPERATOR ID" maxlength="20" />
+    <div class="floor-clock" id="floorClock">--:--:--</div>
+  </div>
+</header>
+
+<!-- NO DATA STATE -->
+<section class="empty-state" id="emptyState">
+  <h1 class="display">No production data loaded.</h1>
+  <p class="lede">
+    Upload a workbook on the <a href="index.html" style="color:var(--accent)">planner page</a> first.
+    Once loaded, the data syncs to this floor screen automatically.
+  </p>
+</section>
+
+<!-- MAIN FLOOR UI -->
+<main class="floor-main" id="floorMain" hidden>
+
+  <section class="wc-banner" id="wcBanner">
+    <div class="wc-banner__inner">
+      <span class="wc-banner__label">WORK CENTER</span>
+      <span class="wc-banner__name" id="wcName">—</span>
+      <span class="wc-banner__sep">·</span>
+      <span class="wc-banner__desc" id="wcDesc">—</span>
+    </div>
+    <div class="wc-banner__stats">
+      <div class="wc-stat"><span class="wc-stat__n" id="statRunning">0</span><span class="wc-stat__l">RUNNING</span></div>
+      <div class="wc-stat"><span class="wc-stat__n" id="statPaused">0</span><span class="wc-stat__l">PAUSED</span></div>
+      <div class="wc-stat"><span class="wc-stat__n" id="statQueue">0</span><span class="wc-stat__l">QUEUE</span></div>
+    </div>
+  </section>
+
+  <!-- QUEUE -->
+  <section class="queue" id="queue">
+    <!-- order cards rendered by JS -->
+  </section>
+
+  <!-- RECENT EVENTS -->
+  <section class="recent">
+    <h2 class="section-head">RECENT&nbsp;ACTIVITY</h2>
+    <ul class="recent-list" id="recentList"></ul>
+  </section>
+</main>
+
+<!-- ── ACTION DRAWER (slides up when an order is tapped) ── -->
+<div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog">
+  <header class="drawer__head">
+    <div>
+      <div class="drawer__order" id="drawerOrder">—</div>
+      <div class="drawer__material" id="drawerMaterial">—</div>
+    </div>
+    <button class="drawer__close" id="drawerClose" aria-label="Close">✕</button>
+  </header>
+
+  <div class="drawer__progress">
+    <div class="drawer__progress-row">
+      <span class="drawer__progress-label">CONFIRMED</span>
+      <span class="drawer__progress-val" id="drawerConfirmed">0 / 0</span>
+    </div>
+    <div class="drawer__bar"><div class="drawer__bar-fill" id="drawerBar"></div></div>
+    <div class="drawer__meta">
+      <span id="drawerStatus" class="pill pill--mute">IDLE</span>
+      <span id="drawerScrap"></span>
+    </div>
+  </div>
+
+  <div class="drawer__actions">
+    <button class="action-btn action-btn--start"  data-action="START">▶ START</button>
+    <button class="action-btn action-btn--pause"  data-action="PAUSE">❚❚ PAUSE</button>
+    <button class="action-btn action-btn--resume" data-action="RESUME">▶ RESUME</button>
+    <button class="action-btn action-btn--qty"    data-action="QUANTITY">＋ REPORT QTY</button>
+    <button class="action-btn action-btn--scrap"  data-action="SCRAP">⚠ REPORT SCRAP</button>
+    <button class="action-btn action-btn--down"   data-action="DOWNTIME">⏱ DOWNTIME</button>
+    <button class="action-btn action-btn--complete" data-action="COMPLETE">✓ COMPLETE ORDER</button>
+  </div>
+</aside>
+
+<!-- ── NUMBER PAD MODAL ── -->
+<div class="numpad-backdrop" id="numpadBackdrop" hidden></div>
+<aside class="numpad" id="numpad" hidden aria-modal="true" role="dialog">
+  <header class="numpad__head">
+    <span class="numpad__title" id="numpadTitle">QUANTITY</span>
+    <button class="numpad__close" id="numpadClose" aria-label="Close">✕</button>
+  </header>
+  <div class="numpad__display" id="numpadDisplay">0</div>
+  <div class="numpad__hint" id="numpadHint">enter quantity completed</div>
+  <div class="numpad__grid">
+    <button class="numpad__key" data-k="1">1</button>
+    <button class="numpad__key" data-k="2">2</button>
+    <button class="numpad__key" data-k="3">3</button>
+    <button class="numpad__key" data-k="4">4</button>
+    <button class="numpad__key" data-k="5">5</button>
+    <button class="numpad__key" data-k="6">6</button>
+    <button class="numpad__key" data-k="7">7</button>
+    <button class="numpad__key" data-k="8">8</button>
+    <button class="numpad__key" data-k="9">9</button>
+    <button class="numpad__key" data-k="C">C</button>
+    <button class="numpad__key" data-k="0">0</button>
+    <button class="numpad__key" data-k="←">←</button>
+  </div>
+  <button class="numpad__confirm" id="numpadConfirm">CONFIRM</button>
+</aside>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="shared.js"></script>
+<script src="floor.js"></script>
+</body>
+</html>
